@@ -1330,7 +1330,12 @@ struct TuiGuard {
 
 impl TuiGuard {
     fn setup() -> Result<Self> {
-        enable_raw_mode().context("failed to enable raw mode")?;
+        enable_raw_mode().context({
+            #[cfg(windows)]
+            { "failed to enable raw mode (requires Windows 10 version 1903 or later with VT processing enabled)" }
+            #[cfg(not(windows))]
+            { "failed to enable raw mode" }
+        })?;
         let mut stdout = io::stdout();
         execute!(stdout, EnterAlternateScreen).context("failed to enter alternate screen")?;
 
@@ -1355,10 +1360,26 @@ impl Drop for TuiGuard {
 
 pub fn run(file_path: PathBuf, start_line: usize, image_protocol: ImageProtocol) -> Result<()> {
     let mut tui = TuiGuard::setup()?;
-    let mut picker = Picker::from_query_stdio().unwrap_or_else(|_| Picker::from_fontsize((10, 20)));
-    if let Some(protocol_type) = protocol_override(image_protocol) {
-        picker.set_protocol_type(protocol_type);
-    }
+    // Windows: skip terminal capability query (conhost doesn't respond to ESC queries)
+    //          and default Auto protocol to Halfblocks (only reliably supported option)
+    // non-Windows: query terminal, then apply any explicit protocol override
+    #[cfg(windows)]
+    let mut picker = {
+        let mut p = Picker::from_fontsize((10, 20));
+        let protocol_type = protocol_override(image_protocol)
+            .unwrap_or(ProtocolType::Halfblocks);
+        p.set_protocol_type(protocol_type);
+        p
+    };
+    #[cfg(not(windows))]
+    let mut picker = {
+        let mut p = Picker::from_query_stdio()
+            .unwrap_or_else(|_| Picker::from_fontsize((10, 20)));
+        if let Some(protocol_type) = protocol_override(image_protocol) {
+            p.set_protocol_type(protocol_type);
+        }
+        p
+    };
     let mut app = App::new(file_path, start_line, picker)?;
     let mut should_redraw = true;
 
@@ -1918,7 +1939,28 @@ fn resolve_image_source(markdown_path: &Path, src: &str) -> Option<ResolvedImage
         return Some(ResolvedImageSource::Remote(src.to_string()));
     }
     if let Some(path) = src.strip_prefix("file://") {
-        return Some(ResolvedImageSource::Local(PathBuf::from(path)));
+        // Windows: file:///C:/path  → C:/path  (drive letter preserved)
+        //          file:///img.png  → %SystemDrive%/img.png  (system drive as default)
+        // Unix:    file:///abs/path → /abs/path (keep as-is)
+        let local_path = {
+            #[cfg(windows)]
+            {
+                let stripped = path.trim_start_matches('/');
+                // Drive letter present (e.g. "C:/...") — use directly
+                let resolved = if stripped.len() >= 2 && stripped.as_bytes()[1] == b':' {
+                    stripped.to_string()
+                } else {
+                    // No drive letter — fall back to the Windows system drive
+                    let system_drive =
+                        std::env::var("SystemDrive").unwrap_or_else(|_| "C:".to_string());
+                    format!("{}/{}", system_drive, stripped)
+                };
+                PathBuf::from(resolved)
+            }
+            #[cfg(not(windows))]
+            { PathBuf::from(path) }
+        };
+        return Some(ResolvedImageSource::Local(local_path));
     }
     if src.contains("://") {
         return None;
