@@ -144,6 +144,60 @@ Clipboard::new().and_then(|mut cb| cb.set_text(...))
 
 ---
 
+## 빌드 방법
+
+### 로컬 크로스 컴파일 (`scripts/build-win.sh`)
+
+macOS 또는 Linux에서 Windows 실행 파일을 생성한다.
+
+**사전 준비**
+
+```bash
+# macOS
+brew install mingw-w64
+rustup target add x86_64-pc-windows-gnu
+
+# Ubuntu/Debian
+sudo apt install gcc-mingw-w64-x86-64
+rustup target add x86_64-pc-windows-gnu
+```
+
+**실행**
+
+```bash
+# debug 빌드 (빠른 확인용)
+./scripts/build-win.sh
+
+# release 빌드 (배포용, strip + LTO 적용)
+./scripts/build-win.sh --release
+```
+
+출력 파일: `dist/windows/mdvi.exe`
+
+---
+
+### GitHub Actions (`.github/workflows/build-windows.yml`)
+
+`develop` 브랜치, `feature/**` 브랜치 push 또는 PR 시 자동 실행.
+
+| Job | 환경 | 타겟 | 용도 |
+|-----|------|------|------|
+| `build-windows` | `windows-latest` | `x86_64-pc-windows-msvc` | 배포용 기본 빌드 |
+| `crossbuild-windows-gnu` | `ubuntu-latest` | `x86_64-pc-windows-gnu` | 크로스 컴파일 검증 |
+| `release` | `ubuntu-latest` | — | `v*` 태그 시 GitHub Release에 `.exe` 자동 첨부 |
+
+빌드 결과물(artifact)은 Actions 탭 → 해당 워크플로우 실행 → **Artifacts** 섹션에서 다운로드 가능.
+
+**릴리즈 배포**
+
+```bash
+# 버전 태그를 push하면 GitHub Release에 .exe 자동 첨부
+git tag v0.7.0
+git push fork v0.7.0
+```
+
+---
+
 ## 진행 상황
 
 - [x] 1. `file://` URI Windows 경로 처리 수정 — `%SystemDrive%` 기반, `#[cfg(windows)]` 빌드타임 분기 (2026-04-02)
@@ -152,3 +206,4 @@ Clipboard::new().and_then(|mut cb| cb.set_text(...))
 - [x] 4. raw mode 에러 메시지 개선 — Windows 빌드 시 "Windows 10 1903 이상 필요" 안내 추가 (2026-04-02)
 - [ ] 5. 클립보드 테스트 검증
 - [x] 6. Windows 크로스 컴파일 빌드 테스트 (`x86_64-pc-windows-gnu`) — ✅ 성공 (2026-04-02)
+- [x] 7. 빌드 스크립트 작성 — `scripts/build-win.sh` + `.github/workflows/build-windows.yml` (2026-04-03)
