@@ -1364,7 +1364,7 @@ pub fn run(file_path: PathBuf, start_line: usize, image_protocol: ImageProtocol)
     //          and default Auto protocol to Halfblocks (only reliably supported option)
     // non-Windows: query terminal, then apply any explicit protocol override
     #[cfg(windows)]
-    let mut picker = {
+    let picker = {
         let mut p = Picker::from_fontsize((10, 20));
         let protocol_type = protocol_override(image_protocol)
             .unwrap_or(ProtocolType::Halfblocks);
@@ -1372,7 +1372,7 @@ pub fn run(file_path: PathBuf, start_line: usize, image_protocol: ImageProtocol)
         p
     };
     #[cfg(not(windows))]
-    let mut picker = {
+    let picker = {
         let mut p = Picker::from_query_stdio()
             .unwrap_or_else(|_| Picker::from_fontsize((10, 20)));
         if let Some(protocol_type) = protocol_override(image_protocol) {
