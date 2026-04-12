@@ -6,6 +6,7 @@ use ratatui::{
 };
 use regex::Regex;
 use std::sync::OnceLock;
+use unicode_width::UnicodeWidthStr;
 use syntect::{
     easy::HighlightLines,
     highlighting::{FontStyle, Style as SyntectStyle, Theme, ThemeSet},
@@ -689,7 +690,7 @@ fn first_non_empty_capture_owned(caps: &regex::Captures<'_>) -> Option<String> {
 }
 
 fn cell_text_width(spans: &[Span<'_>]) -> usize {
-    spans.iter().map(|s| s.content.chars().count()).sum()
+    spans.iter().map(|s| UnicodeWidthStr::width(s.content.as_ref())).sum()
 }
 
 fn render_table(
@@ -777,6 +778,7 @@ fn render_table_separator(col_widths: &[usize]) -> Line<'static> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use unicode_width::UnicodeWidthStr;
 
     #[test]
     fn markdown_images_are_extracted_for_runtime_rendering() {
@@ -911,11 +913,61 @@ mod tests {
             .find(|t| t.contains("Much longer value"))
             .expect("data row should exist");
 
-        let header_sep = header.find('│').expect("header has │ separator");
-        let data_sep = data_row.find('│').expect("data row has │ separator");
+        let header_display = header
+            .split('│')
+            .next()
+            .map(|s| UnicodeWidthStr::width(s))
+            .expect("header has │ separator");
+        let data_display = data_row
+            .split('│')
+            .next()
+            .map(|s| UnicodeWidthStr::width(s))
+            .expect("data row has │ separator");
         assert_eq!(
-            header_sep, data_sep,
-            "│ separator must align at the same column in every row"
+            header_display, data_display,
+            "│ separator must align at the same display column in every row"
+        );
+    }
+
+    #[test]
+    fn table_korean_wide_chars_align_columns_correctly() {
+        // Korean characters are 2 terminal columns wide each.
+        // "이름" = 4 cols, "값" = 2 cols; ASCII "Name" = 4 cols, "Value" = 5 cols.
+        // The separator │ must land at the same byte-column when rendered.
+        let input = "| 이름 | 값 |\n|------|-----|\n| Name | Value |";
+        let doc = render_markdown(input).expect("render succeeds");
+
+        let text_lines: Vec<String> = doc
+            .lines
+            .iter()
+            .map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect::<String>())
+            .collect();
+
+        let header = text_lines
+            .iter()
+            .find(|t| t.contains("이름"))
+            .expect("Korean header line should exist");
+        let data_row = text_lines
+            .iter()
+            .find(|t| t.contains("Name"))
+            .expect("ASCII data row should exist");
+
+        // Compare display widths (terminal columns), not byte offsets.
+        // Korean chars are 3 bytes each in UTF-8 but occupy 2 terminal columns,
+        // so byte positions legitimately differ — display widths must be equal.
+        let header_display = header
+            .split('│')
+            .next()
+            .map(|s| UnicodeWidthStr::width(s))
+            .expect("header has │");
+        let data_display = data_row
+            .split('│')
+            .next()
+            .map(|s| UnicodeWidthStr::width(s))
+            .expect("data row has │");
+        assert_eq!(
+            header_display, data_display,
+            "│ must align at the same display column: Korean wide chars must count as 2 each"
         );
     }
 

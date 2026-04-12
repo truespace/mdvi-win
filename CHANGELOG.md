@@ -4,6 +4,17 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.6.8] - 2026-04-12
+
+### Fixed
+- Table column widths now use Unicode display width (terminal columns) instead of
+  codepoint count, so CJK/Korean characters — which occupy 2 terminal columns each —
+  no longer cause `│` separators to misalign.
+
+### Added
+- `scripts/install.sh`: builds from source and installs `mdvi` to `/usr/local/bin`
+  (or `~/.local/bin` as fallback). Supports `--prefix`, `--uninstall`, and `--no-build`.
+
 ## [0.6.7] - 2026-04-12
 
 ### Fixed
