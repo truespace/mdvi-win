@@ -43,6 +43,12 @@ struct HtmlImageTag {
     hinted_pixel_size: Option<(u32, u32)>,
 }
 
+struct TableBuf {
+    header: Vec<Vec<Span<'static>>>,
+    rows: Vec<Vec<Vec<Span<'static>>>>,
+    current_row: Vec<Vec<Span<'static>>>,
+}
+
 pub fn render_markdown(input: &str) -> Result<RenderedDoc> {
     let mut options = Options::empty();
     options.insert(Options::ENABLE_TABLES);
@@ -63,6 +69,7 @@ pub fn render_markdown(input: &str) -> Result<RenderedDoc> {
     let mut in_blockquote = 0usize;
     let mut pending_link: Option<String> = None;
     let mut pending_image: Option<(String, String)> = None;
+    let mut table_buf: Option<TableBuf> = None;
     let soft_break_as_space = true;
 
     fn push_line(lines: &mut Vec<Line<'static>>, spans: &mut Vec<Span<'static>>) {
@@ -254,14 +261,15 @@ pub fn render_markdown(input: &str) -> Result<RenderedDoc> {
                 }
                 Tag::Table(_) => {
                     blank_line(&mut lines, &mut current_spans);
+                    table_buf = Some(TableBuf {
+                        header: vec![],
+                        rows: vec![],
+                        current_row: vec![],
+                    });
                 }
                 Tag::TableHead => {}
                 Tag::TableRow => {}
-                Tag::TableCell => {
-                    if !current_spans.is_empty() {
-                        current_spans.push(Span::raw(" │ ".to_string()));
-                    }
-                }
+                Tag::TableCell => {}
                 Tag::FootnoteDefinition(name) => {
                     blank_line(&mut lines, &mut current_spans);
                     current_spans.push(Span::styled(
@@ -320,16 +328,28 @@ pub fn render_markdown(input: &str) -> Result<RenderedDoc> {
                     }
                 }
                 TagEnd::Image => {}
-                TagEnd::Table => {
-                    if !current_spans.is_empty() {
-                        push_line(&mut lines, &mut current_spans);
+                TagEnd::TableCell => {
+                    if let Some(buf) = table_buf.as_mut() {
+                        buf.current_row.push(std::mem::take(&mut current_spans));
                     }
-                    lines.push(Line::default());
+                }
+                TagEnd::TableHead => {
+                    if let Some(buf) = table_buf.as_mut() {
+                        buf.header = std::mem::take(&mut buf.current_row);
+                    }
                 }
                 TagEnd::TableRow => {
-                    push_line(&mut lines, &mut current_spans);
+                    if let Some(buf) = table_buf.as_mut() {
+                        let row = std::mem::take(&mut buf.current_row);
+                        buf.rows.push(row);
+                    }
                 }
-                TagEnd::TableCell => {}
+                TagEnd::Table => {
+                    if let Some(buf) = table_buf.take() {
+                        lines.extend(render_table(buf.header, buf.rows));
+                        lines.push(Line::default());
+                    }
+                }
                 _ => {}
             },
             Event::Text(text) => {
@@ -354,10 +374,11 @@ pub fn render_markdown(input: &str) -> Result<RenderedDoc> {
                 }
             }
             Event::Code(text) => {
-                let base = *style_stack.last().unwrap_or(&Style::default());
                 current_spans.push(Span::styled(
-                    format!("`{text}`"),
-                    base.add_modifier(Modifier::BOLD),
+                    format!(" {text} "),
+                    Style::default()
+                        .fg(Color::Rgb(200, 200, 200))
+                        .bg(Color::Rgb(45, 45, 45)),
                 ));
             }
             Event::Html(text) => {
@@ -667,6 +688,92 @@ fn first_non_empty_capture_owned(caps: &regex::Captures<'_>) -> Option<String> {
         .map(ToString::to_string)
 }
 
+fn cell_text_width(spans: &[Span<'_>]) -> usize {
+    spans.iter().map(|s| s.content.chars().count()).sum()
+}
+
+fn render_table(
+    header: Vec<Vec<Span<'static>>>,
+    rows: Vec<Vec<Vec<Span<'static>>>>,
+) -> Vec<Line<'static>> {
+    let col_count = header
+        .len()
+        .max(rows.iter().map(|r| r.len()).max().unwrap_or(0));
+    if col_count == 0 {
+        return vec![];
+    }
+
+    let mut col_widths = vec![0usize; col_count];
+    for (i, cell) in header.iter().enumerate() {
+        col_widths[i] = col_widths[i].max(cell_text_width(cell));
+    }
+    for row in &rows {
+        for (i, cell) in row.iter().enumerate() {
+            if i < col_count {
+                col_widths[i] = col_widths[i].max(cell_text_width(cell));
+            }
+        }
+    }
+
+    let mut result = vec![];
+
+    if !header.is_empty() {
+        result.push(render_table_row(header, &col_widths, col_count, true));
+        result.push(render_table_separator(&col_widths));
+    }
+
+    for row in rows {
+        result.push(render_table_row(row, &col_widths, col_count, false));
+    }
+
+    result
+}
+
+fn render_table_row(
+    mut cells: Vec<Vec<Span<'static>>>,
+    col_widths: &[usize],
+    col_count: usize,
+    is_header: bool,
+) -> Line<'static> {
+    let sep_style = Style::default().add_modifier(Modifier::DIM);
+    cells.resize_with(col_count, Vec::new);
+    let mut spans: Vec<Span<'static>> = vec![];
+    for (i, (cell, &target_w)) in cells.into_iter().zip(col_widths.iter()).enumerate() {
+        if i > 0 {
+            spans.push(Span::styled(" │ ".to_string(), sep_style));
+        }
+        let width = cell_text_width(&cell);
+        if is_header {
+            for span in cell {
+                spans.push(Span::styled(
+                    span.content,
+                    span.style
+                        .fg(Color::Rgb(150, 180, 225))
+                        .add_modifier(Modifier::BOLD),
+                ));
+            }
+        } else {
+            spans.extend(cell);
+        }
+        if width < target_w {
+            spans.push(Span::raw(" ".repeat(target_w - width)));
+        }
+    }
+    Line::from(spans)
+}
+
+fn render_table_separator(col_widths: &[usize]) -> Line<'static> {
+    let style = Style::default().add_modifier(Modifier::DIM);
+    let mut spans = vec![];
+    for (i, &w) in col_widths.iter().enumerate() {
+        if i > 0 {
+            spans.push(Span::styled("─┼─".to_string(), style));
+        }
+        spans.push(Span::styled("─".repeat(w.max(1)), style));
+    }
+    Line::from(spans)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -745,6 +852,70 @@ mod tests {
                 .iter()
                 .any(|span| matches!(span.style.fg, Some(Color::Rgb(_, _, _)))),
             "expected at least one syntax-colored span"
+        );
+    }
+
+    #[test]
+    fn table_header_renders_on_its_own_line() {
+        let input = "| Name | Value |\n|------|-------|\n| Alice | 42 |\n| Bob | 1000 |";
+        let doc = render_markdown(input).expect("render succeeds");
+
+        let text_lines: Vec<String> = doc
+            .lines
+            .iter()
+            .map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect::<String>())
+            .collect();
+
+        let header_line = text_lines
+            .iter()
+            .find(|t| t.contains("Name") && t.contains("Value"))
+            .expect("header line should exist");
+        assert!(
+            !header_line.contains("Alice"),
+            "header should not bleed into first data row"
+        );
+
+        assert!(
+            text_lines.iter().any(|t| t.contains("─")),
+            "separator line should exist between header and data"
+        );
+
+        let alice_line = text_lines
+            .iter()
+            .find(|t| t.contains("Alice"))
+            .expect("Alice row should exist");
+        assert!(
+            !alice_line.contains("Bob"),
+            "Alice and Bob should be on separate lines"
+        );
+    }
+
+    #[test]
+    fn table_columns_are_padded_to_consistent_widths() {
+        let input =
+            "| Short | Col |\n|-------|-----|\n| Much longer value | X |";
+        let doc = render_markdown(input).expect("render succeeds");
+
+        let text_lines: Vec<String> = doc
+            .lines
+            .iter()
+            .map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect::<String>())
+            .collect();
+
+        let header = text_lines
+            .iter()
+            .find(|t| t.contains("Short"))
+            .expect("header line should exist");
+        let data_row = text_lines
+            .iter()
+            .find(|t| t.contains("Much longer value"))
+            .expect("data row should exist");
+
+        let header_sep = header.find('│').expect("header has │ separator");
+        let data_sep = data_row.find('│').expect("data row has │ separator");
+        assert_eq!(
+            header_sep, data_sep,
+            "│ separator must align at the same column in every row"
         );
     }
 
