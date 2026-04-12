@@ -4,6 +4,16 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.6.7] - 2026-04-12
+
+### Fixed
+- Table header no longer merges with the first data row; `TagEnd::TableHead` now correctly flushes header cells to their own line.
+- Table columns are padded to consistent widths so `│` separators align across all rows; a `─┼─` separator line is inserted below the header.
+
+### Changed
+- Table header text is rendered in subtle blue (bold) to visually distinguish it from data rows.
+- Inline code spans use a dark gray background with light gray text instead of backtick wrapping.
+
 ## [0.6.3] - 2026-02-13
 
 ### Changed
